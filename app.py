@@ -96,7 +96,7 @@ def _get_session_choices() -> list[tuple[str, str]]:
 
 def load_session_handler(
     session_id: str,
-) -> tuple[list, list, str, str, str]:
+) -> tuple[list, list, str, str, str, gr.Dropdown]:
     """
     从文件加载历史会话。
 
@@ -104,16 +104,20 @@ def load_session_handler(
         session_id: 要加载的会话 ID
 
     Returns:
-        (聊天历史, 消息列表, 会话ID, 昵称, 性格)
+        (聊天历史, 消息列表, 会话ID, 昵称, 性格, 刷新后的会话下拉框)
     """
     global _current_session_id, _current_nick, _current_nature, _current_title
 
+    dropdown = gr.Dropdown(
+        choices=_get_session_choices(), value=session_id, label="加载历史会话"
+    )
+
     if not session_id:
-        return gr.update(), gr.update(), _current_session_id, _current_nick, _current_nature
+        return gr.update(), gr.update(), _current_session_id, _current_nick, _current_nature, dropdown
 
     loaded = load_session(session_id)
     if not loaded:
-        return gr.update(), gr.update(), _current_session_id, _current_nick, _current_nature
+        return gr.update(), gr.update(), _current_session_id, _current_nick, _current_nature, dropdown
 
     _current_session_id = loaded["session_id"]
     _current_nick = loaded.get("session_name", DEFAULT_NICK_NAME)
@@ -127,7 +131,7 @@ def load_session_handler(
         if m["role"] in ("user", "assistant")
     ]
 
-    return chat_history, loaded["session_messages"], _current_session_id, _current_nick, _current_nature
+    return chat_history, loaded["session_messages"], _current_session_id, _current_nick, _current_nature, dropdown
 
 
 def chat(
@@ -136,7 +140,7 @@ def chat(
     messages: list,
     nick: str,
     nature: str,
-) -> tuple[list, list, str, str]:
+) -> tuple[list, list, str, str, gr.Dropdown]:
     """
     处理用户输入，调用 AI 并返回更新后的聊天历史。
 
@@ -148,7 +152,7 @@ def chat(
         nature: AI 性格描述
 
     Returns:
-        (更新后的聊天历史, 更新后的消息列表, 昵称, 性格)
+        (更新后的聊天历史, 更新后的消息列表, 昵称, 性格, 刷新后的会话下拉框)
     """
     global _current_nick, _current_nature, _current_title
 
@@ -158,7 +162,9 @@ def chat(
 
     # 输入校验
     if not message or not message.strip():
-        return history, messages, _current_nick, _current_nature
+        return history, messages, _current_nick, _current_nature, gr.Dropdown(
+            choices=_get_session_choices(), value=None, label="加载历史会话"
+        )
 
     # 自动生成会话标题
     if not _current_title:
@@ -182,10 +188,21 @@ def chat(
                 {"role": "user", "content": message},
                 {"role": "assistant", "content": f"⚠️ {error}"},
             ]
-            return error_history, messages, _current_nick, _current_nature
+            return error_history, messages, _current_nick, _current_nature, gr.Dropdown(
+                choices=_get_session_choices(), value=None, label="加载历史会话"
+            )
 
         # 追加 AI 回复
         messages.append({"role": "assistant", "content": reply})
+
+        # 保存会话到文件
+        save_session(
+            session_id=_current_session_id,
+            messages=messages,
+            nick_name=_current_nick,
+            nature=_current_nature,
+            session_title=_current_title,
+        )
 
         # 构建新的聊天历史
         new_history = [
@@ -194,7 +211,9 @@ def chat(
             if m["role"] in ("user", "assistant")
         ]
 
-        return new_history, messages, _current_nick, _current_nature
+        return new_history, messages, _current_nick, _current_nature, gr.Dropdown(
+            choices=_get_session_choices(), value=None, label="加载历史会话"
+        )
 
     except ValueError as e:
         messages.pop()  # 回滚
@@ -202,15 +221,19 @@ def chat(
             {"role": "user", "content": message},
             {"role": "assistant", "content": f"⚠️ {str(e)}"},
         ]
-        return error_history, messages, _current_nick, _current_nature
+        return error_history, messages, _current_nick, _current_nature, gr.Dropdown(
+            choices=_get_session_choices(), value=None, label="加载历史会话"
+        )
 
     except Exception as e:
         messages.pop()  # 回滚
         error_history = list(history) + [
             {"role": "user", "content": message},
-            {"role": "assistant", "content": f"⚠️ 发生未知错误：{e}"},
+            {"role": "assistant", "content": f"️ 发生未知错误：{e}"},
         ]
-        return error_history, messages, _current_nick, _current_nature
+        return error_history, messages, _current_nick, _current_nature, gr.Dropdown(
+            choices=_get_session_choices(), value=None, label="加载历史会话"
+        )
 
 
 # ── 构建 Gradio 界面 ───────────────────────────────────────
@@ -280,7 +303,7 @@ with gr.Blocks(title="AI Partner") as demo:
     msg_input.submit(
         fn=chat,
         inputs=[msg_input, chatbot, messages_state, nick_input, nature_input],
-        outputs=[chatbot, messages_state, nick_state, nature_state],
+        outputs=[chatbot, messages_state, nick_state, nature_state, session_dropdown],
     )
 
     # 新建会话
@@ -301,7 +324,7 @@ with gr.Blocks(title="AI Partner") as demo:
     btn_load.click(
         fn=load_session_handler,
         inputs=[session_dropdown],
-        outputs=[chatbot, messages_state, session_id_state, nick_state, nature_state],
+        outputs=[chatbot, messages_state, session_id_state, nick_state, nature_state, session_dropdown],
     )
 
 
